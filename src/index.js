@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain } = require('electron')
-const { spawn } = require('child_process')
+const { spawn, fork } = require('child_process')
 const path = require('path')
 
 if (require('electron-squirrel-startup')) app.quit()
@@ -21,6 +21,7 @@ let tray = null
 let llamaProcess = null
 let voiceProcess = null
 let kamilProcess = null
+let emcpProcess = null
 let isQuitting = false
 
 function createWindow() {
@@ -67,6 +68,19 @@ function createTray() {
   ]))
   tray.on('click', () => {
     mainWindow.isVisible() ? mainWindow.hide() : (mainWindow.show(), mainWindow.focus())
+  })
+}
+
+function spawnEmcp() {
+  console.log('Starting emcp bridge...')
+  emcpProcess = fork(path.join(__dirname, 'emcp_server.js'), [], { silent: true })
+  emcpProcess.stdout.on('data', d => console.log('[emcp]', d.toString().trim()))
+  emcpProcess.stderr.on('data', d => console.error('[emcp]', d.toString().trim()))
+  emcpProcess.on('exit', (code) => {
+    if (!isQuitting) {
+      console.log(`emcp exited (${code}), restarting in 5s...`)
+      setTimeout(spawnEmcp, 5000)
+    }
   })
 }
 
@@ -122,6 +136,7 @@ function registerHotkey() {
 }
 
 app.whenReady().then(() => {
+  spawnEmcp()
   spawnLlama()
   setTimeout(spawnKamil, 60000)
   createWindow()
@@ -137,6 +152,7 @@ app.on('before-quit', () => {
   if (llamaProcess) llamaProcess.kill()
   if (voiceProcess) voiceProcess.kill()
   if (kamilProcess) kamilProcess.kill()
+  if (emcpProcess) emcpProcess.kill()
 })
 
 app.on('activate', () => mainWindow && mainWindow.show())
@@ -145,4 +161,5 @@ ipcMain.handle('get-status', () => ({
   llama: !!(llamaProcess && !llamaProcess.killed),
   voice: !!(voiceProcess && !voiceProcess.killed),
   kamil: !!(kamilProcess && !kamilProcess.killed),
+  emcp: !!(emcpProcess && !emcpProcess.killed),
 }))
