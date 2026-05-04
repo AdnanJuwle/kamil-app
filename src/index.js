@@ -13,11 +13,13 @@ const KAMIL_URL = 'http://127.0.0.1:3000'
 const KAMIL_DIR = 'C:\\kamil'
 const PYTHON = 'C:\\kamil\\venv313\\Scripts\\python.exe'
 const LLAMA_SERVER = 'C:\\llama.cpp\\build\\bin\\llama-server.exe'
-const MODEL = 'C:\\kamil\\models\\qwen3.5-27b-claude-distill-q4.gguf'
+const MODEL = 'C:\\kamil\\models\\deepseek-r1-distill-14b-q4.gguf'
+const VOICE_MODEL = 'C:\\kamil\\models\\gemma4-e4b-q4.gguf'
 
 let mainWindow = null
 let tray = null
 let llamaProcess = null
+let voiceProcess = null
 let kamilProcess = null
 let isQuitting = false
 
@@ -69,17 +71,32 @@ function createTray() {
 }
 
 function spawnLlama() {
-  console.log('Starting llama-server...')
+  console.log('Starting primary model...')
   llamaProcess = spawn(LLAMA_SERVER, [
     '-m', MODEL, '-c', '8192', '-ngl', '99',
     '--host', '0.0.0.0', '--port', '8080', '--log-disable'
   ])
   llamaProcess.on('exit', (code) => {
     if (!isQuitting) {
-      console.log(`llama-server exited (${code}), restarting in 5s...`)
-      setTimeout(spawnLlama, 20000)
+      console.log(`Primary exited (${code}), restarting in 20s...`)
+      setTimeout(() => spawnLlama(), 20000)
     }
   })
+
+  // Start voice model after 30 seconds
+  setTimeout(() => {
+    console.log('Starting voice model...')
+    voiceProcess = spawn(LLAMA_SERVER, [
+      '-m', VOICE_MODEL, '-c', '4096', '-ngl', '99',
+      '--host', '0.0.0.0', '--port', '8084', '--log-disable'
+    ])
+    voiceProcess.on('exit', (code) => {
+      if (!isQuitting) {
+        console.log(`Voice model exited (${code}), restarting in 10s...`)
+        setTimeout(() => spawnVoice(), 10000)
+      }
+    })
+  }, 30000)
 }
 
 function spawnKamil() {
@@ -118,6 +135,7 @@ app.on('before-quit', () => {
   isQuitting = true
   globalShortcut.unregisterAll()
   if (llamaProcess) llamaProcess.kill()
+  if (voiceProcess) voiceProcess.kill()
   if (kamilProcess) kamilProcess.kill()
 })
 
@@ -125,5 +143,6 @@ app.on('activate', () => mainWindow && mainWindow.show())
 
 ipcMain.handle('get-status', () => ({
   llama: !!(llamaProcess && !llamaProcess.killed),
+  voice: !!(voiceProcess && !voiceProcess.killed),
   kamil: !!(kamilProcess && !kamilProcess.killed),
 }))
