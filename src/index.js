@@ -25,33 +25,34 @@ let emcpProcess = null
 let isQuitting = false
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 900,
-    height: 680,
-    minWidth: 600,
-    minHeight: 400,
-    backgroundColor: '#080808',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      autoplayPolicy: 'no-user-gesture-required',
-    },
-    show: false,
-    autoHideMenuBar: true,
-  })
+    mainWindow = new BrowserWindow({
+        width: 900,
+        height: 680,
+        minWidth: 600,
+        minHeight: 400,
+        backgroundColor: '#080808',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            autoplayPolicy: 'no-user-gesture-required',
+        },
+        show: false,
+        autoHideMenuBar: true,
+    })
 
-  mainWindow.loadURL(KAMIL_URL)
-  mainWindow.once('ready-to-show', () => mainWindow.show())
-  mainWindow.on('close', (e) => {
-    if (!isQuitting) {
-      e.preventDefault()
-      mainWindow.hide()
-    }
-  })
-  mainWindow.webContents.on('did-fail-load', () => {
-    setTimeout(() => mainWindow.loadURL(KAMIL_URL), 3000)
-  })
+    // Do NOT call loadURL here – waitForKamil will load it when the backend is ready
+    mainWindow.once('ready-to-show', () => mainWindow.show())
+    mainWindow.on('close', (e) => {
+        if (!isQuitting) {
+            e.preventDefault()
+            mainWindow.hide()
+        }
+    })
+    mainWindow.webContents.on('did-fail-load', () => {
+        // Retry loading after a short delay if it fails
+        setTimeout(waitForKamil, 3000)
+    })
 }
 
 function createTray() {
@@ -107,23 +108,41 @@ function spawnLlama() {
     voiceProcess.on('exit', (code) => {
       if (!isQuitting) {
         console.log(`Voice model exited (${code}), restarting in 10s...`)
-        setTimeout(() => spawnVoice(), 10000)
+        setTimeout(() => {
+          if (!isQuitting) {
+            voiceProcess = spawn(LLAMA_SERVER, [
+              '-m', VOICE_MODEL, '-c', '4096', '-ngl', '99',
+              '--host', '0.0.0.0', '--port', '8084', '--log-disable'
+            ])
+          }
+        }, 10000)
       }
     })
   }, 30000)
 }
 
 function spawnKamil() {
-  console.log('Starting Kamil backend...')
-  kamilProcess = spawn(PYTHON, ['run.py'], { cwd: KAMIL_DIR })
-  kamilProcess.stdout.on('data', d => console.log('[kamil]', d.toString().trim()))
-  kamilProcess.stderr.on('data', d => console.error('[kamil]', d.toString().trim()))
-  kamilProcess.on('exit', (code) => {
-    if (!isQuitting) {
-      console.log(`Kamil backend exited (${code}), restarting in 5s...`)
-      setTimeout(spawnKamil, 5000)
-    }
-  })
+    console.log('Starting Kamil backend...')
+    kamilProcess = spawn(PYTHON, ['run.py'], { cwd: KAMIL_DIR })
+    kamilProcess.stdout.on('data', d => process.stdout.write(`[kamil] ${d}`))
+    kamilProcess.stderr.on('data', d => process.stderr.write(`[kamil] ${d}`))
+    kamilProcess.on('exit', (code) => {
+        if (!isQuitting) {
+            console.log(`Kamil backend exited (${code}), restarting in 5s...`)
+            setTimeout(spawnKamil, 5000)
+        }
+    })
+}
+
+function waitForKamil() {
+    const http = require('http')
+    http.get('http://127.0.0.1:3000/', (res) => {
+        console.log('Kamil backend ready — loading UI')
+        mainWindow.loadURL(KAMIL_URL)
+    }).on('error', () => {
+        // Not ready yet — retry in 2 seconds
+        setTimeout(waitForKamil, 2000)
+    })
 }
 
 function registerHotkey() {
@@ -136,12 +155,18 @@ function registerHotkey() {
 }
 
 app.whenReady().then(() => {
-  spawnEmcp()
-  spawnLlama()
-  setTimeout(spawnKamil, 60000)
-  createWindow()
-  createTray()
-  registerHotkey()
+    spawnEmcp()
+    spawnLlama()
+    
+    // Start backend after a short delay (llama needs time to load model)
+    setTimeout(spawnKamil, 5000)
+    
+    createWindow()   // window created but blank
+    createTray()
+    registerHotkey()
+    
+    // Poll until backend responds instead of fixed timeout
+    setTimeout(waitForKamil, 8000)  // start polling after 8 seconds
 })
 
 app.on('window-all-closed', (e) => e.preventDefault())
@@ -153,6 +178,13 @@ app.on('before-quit', () => {
   if (voiceProcess) voiceProcess.kill()
   if (kamilProcess) kamilProcess.kill()
   if (emcpProcess) emcpProcess.kill()
+})
+
+app.on('web-contents-created', (event, contents) => {
+  contents.on('console-message', (event, level, message, line, sourceId) => {
+    const levels = ['verbose', 'info', 'warning', 'error']
+    console.log(`[renderer:${levels[level]}] ${message}`)
+  })
 })
 
 app.on('activate', () => mainWindow && mainWindow.show())
