@@ -19,6 +19,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@odin_ssup/emcp": "^0.1.1",
     "electron-squirrel-startup": "^1.0.1"
   },
   "devDependencies": {

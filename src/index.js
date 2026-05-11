@@ -15,11 +15,13 @@ const PYTHON = 'C:\\kamil\\venv313\\Scripts\\python.exe'
 const LLAMA_SERVER = 'C:\\llama.cpp\\build\\bin\\llama-server.exe'
 const MODEL = 'C:\\kamil\\models\\deepseek-r1-distill-14b-q4.gguf'
 const VOICE_MODEL = 'C:\\kamil\\models\\gemma4-e4b-q4.gguf'
+const EXECUTOR_MODEL = 'C:\\kamil\\models\\qwen2.5-3b-executor-q8.gguf'
 
 let mainWindow = null
 let tray = null
 let llamaProcess = null
 let voiceProcess = null
+let executorProcess = null
 let kamilProcess = null
 let emcpProcess = null
 let isQuitting = false
@@ -121,6 +123,22 @@ function spawnLlama() {
   }, 30000)
 }
 
+function spawnExecutor() {
+    console.log('Starting executor model...')
+    executorProcess = spawn(LLAMA_SERVER, [
+        '-m', EXECUTOR_MODEL, '-c', '2048', '-ngl', '99',
+        '--host', '0.0.0.0', '--port', '8083', '--log-disable'
+    ])
+    executorProcess.stdout.on('data', d => process.stdout.write(`[executor] ${d}`))
+    executorProcess.stderr.on('data', d => process.stderr.write(`[executor] ${d}`))
+    executorProcess.on('exit', (code) => {
+        if (!isQuitting) {
+            console.log(`Executor exited (${code}), restarting in 10s...`)
+            setTimeout(spawnExecutor, 10000)
+        }
+    })
+}
+
 function spawnKamil() {
     console.log('Starting Kamil backend...')
     kamilProcess = spawn(PYTHON, ['run.py'], { cwd: KAMIL_DIR })
@@ -165,6 +183,9 @@ app.whenReady().then(() => {
     createTray()
     registerHotkey()
     
+    // Start executor model after 35 seconds
+    setTimeout(spawnExecutor, 35000)
+    
     // Poll until backend responds instead of fixed timeout
     setTimeout(waitForKamil, 8000)  // start polling after 8 seconds
 })
@@ -176,6 +197,7 @@ app.on('before-quit', () => {
   globalShortcut.unregisterAll()
   if (llamaProcess) llamaProcess.kill()
   if (voiceProcess) voiceProcess.kill()
+  if (executorProcess) executorProcess.kill()
   if (kamilProcess) kamilProcess.kill()
   if (emcpProcess) emcpProcess.kill()
 })
@@ -192,6 +214,7 @@ app.on('activate', () => mainWindow && mainWindow.show())
 ipcMain.handle('get-status', () => ({
   llama: !!(llamaProcess && !llamaProcess.killed),
   voice: !!(voiceProcess && !voiceProcess.killed),
+  executor: !!(executorProcess && !executorProcess.killed),
   kamil: !!(kamilProcess && !kamilProcess.killed),
   emcp: !!(emcpProcess && !emcpProcess.killed),
 }))
